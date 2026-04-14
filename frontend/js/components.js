@@ -1,255 +1,149 @@
-export function welcomeView() {
-  return `
-    <div class="card">
-      <h2>Welcome</h2>
-      <p>Select an option from the navigation above.</p>
-    </div>
-  `;
-}
-
-export function addPatientView() {
-  return `
-    <div class="card">
-      <h2>Add Patient</h2>
-
-      <input id="pid" placeholder="Patient ID" />
-      <input id="name" placeholder="Name" />
-      <input id="age" placeholder="Age" />
-      <input id="gender" placeholder="Gender" />
-      <input id="notes" placeholder="Notes" />
-
-      <button class="primary-btn" type="button" onclick="window.submitPatient()">
-  ➕ Add Patient
-</button>
-
-      <p id="status"></p>
-
-      <button class="back-btn" onclick="window.loadView('dashboard')">
-  ← Back to Dashboard
-</button>
-
-    </div>
-  `;
-}
-
-
-
-
-export function linkDiseaseView() {
-  return `
-    <div class="card">
-      <h2>Link Disease</h2>
-
-      <input id="pid" placeholder="Patient ID" />
-      <input id="disease" placeholder="Disease Name" />
-
-      <button class="primary-btn" id="linkDisease">
-  🔗 Link Disease
-</button>
-
-      <p id="status"></p>
-
-      <button class="back-btn" onclick="window.loadView('dashboard')">
-  ← Back to Dashboard
-</button>
-</div>
-
-  `;
-}
-
-
-export function searchView() {
-  return `
-    <div class="card">
-      <h2>Patient Insights</h2>
-      <input id="pid" placeholder="Patient ID">
-      <button class="primary" id="searchPatient">Search</button>
-      <pre id="result"></pre>
-       <!-- ✅ BACK BUTTON -->
-      <button class="back-btn" onclick="window.loadView('dashboard')">
-  ← Back to Dashboard
-</button>
-
-
-    </div>
-  `;
-}
-
-export function riskView() {
-  return `
-    <div class="card">
-      <h2>🔥 Patient Risk Scores</h2>
-      <p>Calculate health risk score based on diseases & treatments.</p>
-
-      <input id="riskPid" class="risk-input" placeholder="Enter Patient ID" />
-
-      <button id="calculateRisk" class="risk-btn">
-  🔥 Calculate Risk
-</button>
-
-      <div id="riskResult" style="margin-top: 12px;"></div>
-
-      <br />
-      <button class="back-btn" onclick="window.loadView('dashboard')">
-  ← Back to Dashboard
-</button>
-
-
-    </div>
-  `;
-}
-
-
 export function dashboardView() {
   return `
-    <div class="card dashboard">
-      <h2>⭐ MedGraph Dashboard ⭐</h2>
-      <p class="muted">
-        A smart knowledge graph for patients, diseases & treatments.
-      </p>
+    <section class="card dashboard">
+      <h2>Academic and Career Knowledge Graph</h2>
+      <p class="muted">Explore skill gaps, course pathways, and best-fit jobs using graph intelligence.</p>
 
       <div class="dashboard-grid">
-        <button onclick="window.loadView('graph')">🧠 View Medical Graph</button>
-<button onclick="window.loadView('add')">➕ Add New Patient</button>
-
-
-<button onclick="window.loadView('risk')">🔥 Update Risk Scores</button>
-<button onclick="window.loadView('import')">📁 Import Data (CSV)</button>
-
-
+        <button data-view="graph">View Career Graph</button>
+        <button data-view="add">Add Student Profile</button>
+        <button data-view="link">Link Skill or Job Interest</button>
+        <button data-view="insights">Student Insights</button>
+        <button data-view="recommend">Recommendations</button>
+        <button data-view="import">Import Students CSV</button>
       </div>
-    </div>
+    </section>
+  `;
+}
+
+export function addStudentView() {
+  return `
+    <section class="card">
+      <h2>Add Student</h2>
+      <input id="sid" placeholder="Student ID (e.g., S101)" />
+      <input id="name" placeholder="Name" />
+      <input id="degree" placeholder="Degree (e.g., B.Tech CSE)" />
+      <input id="skills" placeholder="Skills (comma separated)" />
+      <input id="interests" placeholder="Interested Jobs (comma separated)" />
+      <input id="notes" placeholder="Notes (optional)" />
+      <button id="submitStudent" class="primary-btn">Add Student</button>
+      <p id="status" class="status"></p>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
+  `;
+}
+
+export function linkView() {
+  return `
+    <section class="card">
+      <h2>Link Student Data</h2>
+      <input id="linkSid" placeholder="Student ID" />
+
+      <div class="split-actions">
+        <input id="linkSkill" placeholder="Skill to add" />
+        <button id="linkSkillBtn" class="primary-btn">Link Skill</button>
+      </div>
+
+      <div class="split-actions">
+        <input id="linkJob" placeholder="Job interest to add" />
+        <button id="linkJobBtn" class="primary-btn">Link Job Interest</button>
+      </div>
+
+      <p id="linkStatus" class="status"></p>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
+  `;
+}
+
+export function insightsView() {
+  return `
+    <section class="card">
+      <h2>Student Insights</h2>
+      <input id="insightSid" placeholder="Student ID" />
+      <button id="fetchInsights" class="primary-btn">Get Insights</button>
+      <div id="insightResult" class="result-block"></div>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
+  `;
+}
+
+export function recommendationView() {
+  return `
+    <section class="card">
+      <h2>Recommendation Engine</h2>
+      <input id="recSid" placeholder="Student ID" />
+      <button id="fetchRecommendations" class="primary-btn">Run Recommendations</button>
+      <button id="fetchSimilar" class="ghost-btn">Find Similar Students</button>
+      <div id="recommendResult" class="result-block"></div>
+      <div id="similarResult" class="result-block"></div>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
   `;
 }
 
 export function importCSVView() {
   return `
-    <div class="card">
-      <h2>Import CSV</h2>
-      <p>Select a patient CSV file to upload into MedGraph.</p>
-
-      <label class="file-upload">
-  <input type="file" id="csvFile" />
-  <span class="file-upload-text">📄 Choose CSV file</span>
-</label>
-
-      <br /><br />
-
-      <button id="uploadCSV" class="primary-btn">
-  ⬆️ Upload CSV
-</button>
-
-      <p id="csvStatus"></p>
-
-      <br />
-       <!-- ✅ BACK BUTTON -->
-      <button class="back-btn" onclick="window.loadView('dashboard')">
-  ← Back to Dashboard
-</button>
-
-
-    </div>
+    <section class="card">
+      <h2>Import Student CSV</h2>
+      <p class="muted">Expected columns: sid, name, degree, skills, interests</p>
+      <input id="csvFile" type="file" accept=".csv" />
+      <button id="uploadCSV" class="primary-btn">Upload CSV</button>
+      <p id="csvStatus" class="status"></p>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
   `;
 }
 
 export function graphView() {
   return `
-  <div class="graph-page full-width">
+    <section class="graph-page">
+      <div class="graph-toolbar">
+        <div class="graph-actions-row">
+          <button id="resetFilterBtn" class="graph-action-btn">Reset Filter</button>
+          <button id="cleanLayoutBtn" class="graph-action-btn">Clean Layout</button>
+          <button id="clusterGraphBtn" class="graph-action-btn">Cluster Node</button>
+          <button id="resetViewBtn" class="graph-action-btn">Reset View</button>
+        </div>
 
-    <!-- =====================
-         Toolbar
-    ====================== -->
-    <div class="graph-toolbar">
+        <div class="legend-row">
+          <button type="button" class="legend legend-chip student" data-node-category="Student">Student</button>
+          <button type="button" class="legend legend-chip skill" data-node-category="Skill">Skill</button>
+          <button type="button" class="legend legend-chip course" data-node-category="Course">Course</button>
+          <button type="button" class="legend legend-chip job" data-node-category="Job">Job</button>
+          <button type="button" class="legend legend-chip company" data-node-category="Company">Company</button>
+        </div>
 
-      <!-- Node type pills -->
-      <div class="node-types">
-        <button class="pill drug">Drug</button>
-        <button class="pill disease">Disease</button>
-        <button class="pill gene">Gene</button>
-        <button class="pill symptom">Symptom</button>
-        <button class="pill patient">Patient</button>
-      </div>
-
-      <!-- Action buttons -->
-      <div class="actions">
-        <button id="resetFilterBtn">Reset Filter</button>
-        <button id="riskBtn">Calculate Risk Score</button>
-        <button id="similarBtn">Find Similar Patients</button>
-        <button id="cleanLayoutBtn">Clean Layout</button>
-        <button id="clusterPatientsBtn">Cluster Patients</button>
-        <button id="resetViewBtn">Reset View</button>
-      </div>
-
-      <!-- Search row -->
-      <div class="search-row">
-        <select id="relFilter">
-          <option value="">All Relationships</option>
-          <option value="HAS_DISEASE">HAS_DISEASE</option>
-          <option value="TREATS">TREATS</option>
-          <option value="HAS_SYMPTOM">HAS_SYMPTOM</option>
-          <option value="INTERACTS_WITH">INTERACTS_WITH</option>
-        </select>
-
-        <input id="nodeSearch" placeholder="Search node..." />
-
-        <button id="findNode" class="btn btn-secondary">
-          🔍 Find
-        </button>
-
-        <button id="refreshGraph" class="btn btn-primary">
-          🔄 Load / Refresh Graph
-        </button>
-      </div>
-    </div>
-
-    <!-- =====================
-         Similar Patients Panel
-    ====================== -->
-    <div class="similar-patients-panel">
-      <h4>👥 Similar Patients</h4>
-      <div id="similarStatus" class="similar-status muted">
-        Click “Find Similar Patients” to analyze similarity
-      </div>
-      <ul id="similarList" class="similar-list"></ul>
-    </div>
-
-    <!-- =====================
-         Main Content Area
-    ====================== -->
-    <div class="graph-content">
-
-      <!-- 🔴 GRAPH RENDER TARGET (D3 OWNS SVG) -->
-      <div
-        id="graph-container"
-        style="height: 75vh; min-height: 600px; width: 100%;"
-      ></div>
-
-      <!-- Node details -->
-      <div class="node-info">
-        <h3>Node Info</h3>
-        <div id="details-panel">
-          Click a node to see details
+        <div class="search-row">
+          <select id="relFilter">
+            <option value="">All Relationships</option>
+            <option value="HAS_SKILL">HAS_SKILL</option>
+            <option value="INTERESTED_IN">INTERESTED_IN</option>
+            <option value="TEACHES">TEACHES</option>
+            <option value="REQUIRES">REQUIRES</option>
+            <option value="OFFERS">OFFERS</option>
+          </select>
+          <select id="graphFocusFilter">
+            <option value="">All Graph Data</option>
+            <option value="jobs">Show Only Jobs</option>
+            <option value="learning_path">Show Learning Path</option>
+            <option value="missing_skills">Highlight Missing Skills</option>
+          </select>
+          <input id="nodeSearch" placeholder="Search by ID or name" />
+          <button id="findNode" class="ghost-btn">Find Node</button>
+          <button id="clearSearchBtn" class="ghost-btn">Clear Search</button>
+          <button id="refreshGraph" class="primary-btn">Refresh Graph</button>
         </div>
       </div>
 
-    </div>
+      <div class="graph-content">
+        <div id="graph-container"></div>
+        <aside class="node-panel">
+          <h3>Node Details</h3>
+          <div id="details-panel" class="muted">Click a node to inspect its connections.</div>
+        </aside>
+      </div>
 
-    <!-- Back button -->
-    <button
-      class="back-btn graph-back"
-      onclick="window.loadView('dashboard')"
-    >
-      ← Back to Dashboard
-    </button>
-
-  </div>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
   `;
 }
-
-
-
-
-
-
-
-

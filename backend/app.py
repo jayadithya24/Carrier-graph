@@ -1,480 +1,668 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from neo4j import GraphDatabase
 import csv
-import io
-
-def run_query(query, params=None):
-    with driver.session() as session:
-        result = session.run(query, params or {})
-        return [r.data() for r in result]
-
-
-def resolve_disease_name(session, disease_name):
-    raw_name = str(disease_name or "").strip()
-    if not raw_name:
-        return ""
-
-    record = session.run(
-        """
-        MATCH (d:Disease)
-        WHERE toLower(trim(d.name)) = toLower(trim($name))
-        RETURN d.name AS name
-        LIMIT 1
-        """,
-        name=raw_name,
-    ).single()
-
-    return (record["name"].strip() if record and record.get("name") else raw_name)
+import os
 
 app = Flask(__name__)
 CORS(app)
 
+
 driver = GraphDatabase.driver(
     "bolt://localhost:7687",
-    auth=("neo4j", "neo4j123")   # ← change password if needed
+    auth=("neo4j", "neo4j123"),
 )
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "bda")
 
 
+def normalize_name(value):
+    return str(value or "").strip()
 
-# --------------------
-# Health Check
-# --------------------
+
+def normalize_id(value):
+    return str(value or "").strip().upper()
+
+
+def parse_list_field(raw_value):
+    if isinstance(raw_value, list):
+        values = raw_value
+    elif isinstance(raw_value, str):
+        values = raw_value.replace("|", ",").split(",")
+    else:
+        values = []
+
+    cleaned = []
+    seen = set()
+    for item in values:
+        text = normalize_name(item)
+        key = text.lower()
+        if text and key not in seen:
+            seen.add(key)
+            cleaned.append(text)
+    return cleaned
+
+
+def resolve_existing_name(session, label, name):
+    raw_name = normalize_name(name)
+    if not raw_name:
+        return ""
+
+    query = f"""
+    MATCH (n:{label})
+    WHERE toLower(trim(n.name)) = toLower(trim($name))
+    RETURN n.name AS name
+    LIMIT 1
+    """
+    record = session.run(query, name=raw_name).single()
+    if record and record.get("name"):
+        return record["name"].strip()
+    return raw_name
+
+
+def score_job_matches(session, student_skills):
+    skill_keys = [s.lower() for s in student_skills]
+
+    query = """
+    MATCH (job:Job)-[:REQUIRES]->(req:Skill)
+    WITH job, collect(DISTINCT req.name) AS required_skills
+    WITH
+        job,
+        required_skills,
+        size([s IN required_skills WHERE toLower(s) IN $skill_keys]) AS overlap
+    WHERE size(required_skills) > 0
+    RETURN
+        job.name AS job,
+        required_skills,
+        overlap,
+        toFloat(overlap) / toFloat(size(required_skills)) AS score
+    ORDER BY score DESC, overlap DESC, job ASC
+    """
+
+    rows = session.run(query, skill_keys=skill_keys)
+    matches = []
+    for row in rows:
+        score_pct = round(float(row["score"]) * 100.0, 1)
+        matches.append(
+            {
+                "job": row["job"],
+                "required_skills": row["required_skills"],
+                "matched_skills": row["overlap"],
+                "score": score_pct,
+            }
+        )
+    return matches
+
+
+def calculate_skill_gap_score(current_skills, required_skills):
+    required_unique = sorted({s for s in required_skills if s})
+    if not required_unique:
+        return 0.0
+
+    current_keys = {s.lower() for s in current_skills if s}
+    missing_count = len([s for s in required_unique if s.lower() not in current_keys])
+    return round((missing_count / len(required_unique)) * 100.0, 1)
+
+
+def build_graph_from_csv():
+    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "sample.csv")
+    if not os.path.exists(data_path):
+        return {"nodes": [], "links": []}
+
+    nodes = []
+    links = []
+    seen_nodes = set()
+    seen_links = set()
+
+    def add_node(node_id, label, name, student_id=None):
+        if node_id in seen_nodes:
+            return
+        seen_nodes.add(node_id)
+        payload = {"id": node_id, "label": label, "name": name}
+        if student_id:
+            payload["student_id"] = student_id
+        nodes.append(payload)
+
+    def add_link(source, target, rel_type):
+        key = (source, target, rel_type)
+        if key in seen_links:
+            return
+        seen_links.add(key)
+        links.append({"source": source, "target": target, "type": rel_type})
+
+    with open(data_path, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            sid = normalize_id(row.get("sid") or row.get("student_id"))
+            student_name = normalize_name(row.get("name"))
+            if not sid:
+                continue
+
+            student_node_id = f"Student:{sid}"
+            add_node(student_node_id, "Student", student_name or student_node_id, sid)
+
+            for skill in parse_list_field(row.get("skills", "")):
+                skill_node_id = f"Skill:{skill.lower()}"
+                add_node(skill_node_id, "Skill", skill)
+                add_link(student_node_id, skill_node_id, "HAS_SKILL")
+
+            for job in parse_list_field(row.get("interests", "")):
+                job_node_id = f"Job:{job.lower()}"
+                add_node(job_node_id, "Job", job)
+                add_link(student_node_id, job_node_id, "INTERESTED_IN")
+
+    return {"nodes": nodes, "links": links}
+
+
 @app.route("/")
 def home():
-    return jsonify({"status": "NeoGraphMed Backend is running"})
+    return jsonify({"status": "CareerGraph backend is running"})
 
 
 @app.route("/test")
 def test_neo4j():
-    query = "MATCH (n) RETURN count(n) AS total_nodes"
-    result = run_query(query)
-    return jsonify(result)
+    with driver.session(database=NEO4J_DATABASE) as session:
+        record = session.run("MATCH (n) RETURN count(n) AS total_nodes").single()
+    return jsonify({"total_nodes": record["total_nodes"] if record else 0})
 
 
-# --------------------
-# Add Patient (WITH NAME ✅)
-# --------------------
-@app.route("/add_patient", methods=["POST"])
-def add_patient():
+@app.route("/add_student", methods=["POST"])
+def add_student():
     try:
         data = request.json or {}
-        print("RECEIVED DATA:", data)
 
-        pid = (data.get("pid") or "").strip()
-        name = data.get("name")
-        age = data.get("age")
-        gender = data.get("gender")
-        notes = (data.get("notes") or "").strip()
+        sid = normalize_id(data.get("sid"))
+        name = normalize_name(data.get("name"))
+        degree = normalize_name(data.get("degree"))
+        notes = normalize_name(data.get("notes"))
 
-        if not pid or not name:
-            return jsonify({"error": "Patient ID and name are required"}), 400
+        if not sid or not name:
+            return jsonify({"error": "Student ID and name are required"}), 400
 
-        raw_diseases = data.get("diseases", [])
-        if isinstance(raw_diseases, str):
-            raw_diseases = raw_diseases.split(",")
-        elif not isinstance(raw_diseases, list):
-            raw_diseases = []
+        skills = parse_list_field(data.get("skills", []))
+        interests = parse_list_field(data.get("interests", []))
 
-        diseases = []
-        seen = set()
-        for item in raw_diseases:
-            disease = str(item or "").strip()
-            key = disease.lower()
-            if disease and key not in seen:
-                seen.add(key)
-                diseases.append(disease)
-        
-        with driver.session() as session:
+        with driver.session(database=NEO4J_DATABASE) as session:
             existing = session.run(
                 """
-                MATCH (p:Patient {id: toUpper(trim($pid))})
-                RETURN count(p) AS total
+                MATCH (s:Student {id: $sid})
+                RETURN count(s) AS total
                 """,
-                pid=pid,
+                sid=sid,
             ).single()
 
             if existing and existing["total"] > 0:
-                return jsonify({"error": "Patient ID already exists"}), 409
+                return jsonify({"error": "Student ID already exists"}), 409
 
-            query = """
-            CREATE (p:Patient {id: toUpper(trim($pid))})
-            SET p.name = $name,
-                p.age = $age,
-                p.gender = $gender,
-                p.notes = $notes
-            """
             session.run(
-                query,
-                pid=pid,
+                """
+                CREATE (s:Student {id: $sid, name: $name, degree: $degree, notes: $notes})
+                """,
+                sid=sid,
                 name=name,
-                age=age,
-                gender=gender,
-                notes=notes
+                degree=degree,
+                notes=notes,
             )
 
-            # If diseases were not explicitly provided, try inferring from notes
-            # by matching known disease names already present in the graph.
-            if not diseases and notes:
-                inferred = session.run(
-                    """
-                    MATCH (d:Disease)
-                    WHERE toLower($notes) CONTAINS toLower(d.name)
-                    RETURN collect(DISTINCT d.name) AS diseases
-                    """,
-                    notes=notes
-                ).single()
-
-                for item in (inferred["diseases"] if inferred else []):
-                    disease = str(item or "").strip()
-                    key = disease.lower()
-                    if disease and key not in seen:
-                        seen.add(key)
-                        diseases.append(disease)
-
-            for disease in diseases:
-                canonical_disease = resolve_disease_name(session, disease)
-                if not canonical_disease:
-                    continue
-
+            for skill in skills:
+                canonical_skill = resolve_existing_name(session, "Skill", skill)
                 session.run(
                     """
-                    MATCH (p:Patient {id: toUpper(trim($pid))})
-                    MERGE (d:Disease {name:$disease})
-                    MERGE (p)-[:HAS_DISEASE]->(d)
+                    MATCH (s:Student {id: $sid})
+                    MERGE (sk:Skill {name: $skill})
+                    MERGE (s)-[:HAS_SKILL]->(sk)
                     """,
-                    pid=pid,
-                    disease=canonical_disease
+                    sid=sid,
+                    skill=canonical_skill,
                 )
 
-        return jsonify({
-            "status": "Patient added successfully",
-            "linked_diseases": diseases
-        }), 200
+            for job in interests:
+                canonical_job = resolve_existing_name(session, "Job", job)
+                session.run(
+                    """
+                    MATCH (s:Student {id: $sid})
+                    MERGE (j:Job {name: $job})
+                    MERGE (s)-[:INTERESTED_IN]->(j)
+                    """,
+                    sid=sid,
+                    job=canonical_job,
+                )
 
-    except Exception as e:
-        print("❌ ERROR in /add_patient:", e)
-        return jsonify({"error": "Failed to add patient"}), 500
+        return (
+            jsonify(
+                {
+                    "status": "Student added successfully",
+                    "linked_skills": skills,
+                    "linked_interests": interests,
+                }
+            ),
+            200,
+        )
+    except Exception as exc:
+        print("ERROR in /add_student:", exc)
+        return jsonify({"error": "Failed to add student"}), 500
 
+
+@app.route("/link_student_skill", methods=["POST"])
+def link_student_skill():
+    data = request.json or {}
+    sid = normalize_id(data.get("sid"))
+    skill_raw = normalize_name(data.get("skill"))
+
+    if not sid or not skill_raw:
+        return jsonify({"error": "Student ID and skill are required"}), 400
+
+    with driver.session(database=NEO4J_DATABASE) as session:
+        skill = resolve_existing_name(session, "Skill", skill_raw)
+        session.run(
+            """
+            MATCH (s:Student {id: $sid})
+            MERGE (sk:Skill {name: $skill})
+            MERGE (s)-[:HAS_SKILL]->(sk)
+            """,
+            sid=sid,
+            skill=skill,
+        )
+
+    return jsonify({"status": "Skill linked successfully"})
+
+
+@app.route("/link_student_interest", methods=["POST"])
+def link_student_interest():
+    data = request.json or {}
+    sid = normalize_id(data.get("sid"))
+    job_raw = normalize_name(data.get("job"))
+
+    if not sid or not job_raw:
+        return jsonify({"error": "Student ID and job are required"}), 400
+
+    with driver.session(database=NEO4J_DATABASE) as session:
+        job = resolve_existing_name(session, "Job", job_raw)
+        session.run(
+            """
+            MATCH (s:Student {id: $sid})
+            MERGE (j:Job {name: $job})
+            MERGE (s)-[:INTERESTED_IN]->(j)
+            """,
+            sid=sid,
+            job=job,
+        )
+
+    return jsonify({"status": "Job interest linked successfully"})
+
+
+@app.route("/student_insights/<sid>", methods=["GET"])
+def student_insights(sid):
+    sid = normalize_id(sid)
+
+    with driver.session(database=NEO4J_DATABASE) as session:
+        record = session.run(
+            """
+            MATCH (s:Student {id: $sid})
+            OPTIONAL MATCH (s)-[:HAS_SKILL]->(owned:Skill)
+            OPTIONAL MATCH (s)-[:INTERESTED_IN]->(job:Job)
+            OPTIONAL MATCH (job)-[:REQUIRES]->(required:Skill)
+            RETURN
+                s.id AS student_id,
+                s.name AS student_name,
+                s.degree AS degree,
+                collect(DISTINCT owned.name) AS skills,
+                collect(DISTINCT job.name) AS interested_jobs,
+                collect(DISTINCT required.name) AS required_skills
+            """,
+            sid=sid,
+        ).single()
+
+        if not record:
+            return jsonify({"error": "Student not found"}), 404
+
+        skills = sorted([x for x in (record["skills"] or []) if x])
+        interested_jobs = sorted([x for x in (record["interested_jobs"] or []) if x])
+        required_skills = sorted([x for x in (record["required_skills"] or []) if x])
+
+        skill_keys = {s.lower() for s in skills}
+        missing_skills = [s for s in required_skills if s.lower() not in skill_keys]
+
+        course_rows = session.run(
+            """
+            MATCH (c:Course)-[:TEACHES]->(sk:Skill)
+            WHERE sk.name IN $missing_skills
+            RETURN c.name AS course, collect(DISTINCT sk.name) AS teaches
+            ORDER BY course ASC
+            """,
+            missing_skills=missing_skills,
+        )
+        suggested_courses = [
+            {"course": row["course"], "teaches": row["teaches"]} for row in course_rows
+        ]
+
+        job_matches = score_job_matches(session, skills)
+
+        similar_rows = session.run(
+            """
+            MATCH (s1:Student {id: $sid})-[:HAS_SKILL]->(skill:Skill)<-[:HAS_SKILL]-(s2:Student)
+            WHERE s2.id <> s1.id
+            RETURN
+                s2.id AS student_id,
+                s2.name AS student_name,
+                collect(DISTINCT skill.name) AS shared_skills,
+                count(DISTINCT skill) AS score
+            ORDER BY score DESC, student_name ASC
+            LIMIT 5
+            """,
+            sid=sid,
+        )
+        similar_students = [
+            {
+                "student_id": row["student_id"],
+                "student_name": row["student_name"],
+                "shared_skills": row["shared_skills"],
+                "score": row["score"],
+            }
+            for row in similar_rows
+        ]
+
+        skill_gap_score = calculate_skill_gap_score(skills, required_skills)
+
+    return jsonify(
+        {
+            "student_id": record["student_id"],
+            "student_name": record["student_name"],
+            "degree": record["degree"],
+            "current_skills": skills,
+            "interested_jobs": interested_jobs,
+            "missing_skills": missing_skills,
+            "skill_gap_score": skill_gap_score,
+            "suggested_courses": suggested_courses,
+            "recommended_jobs": job_matches[:5],
+            "similar_students": similar_students,
+        }
+    )
+
+
+@app.route("/recommendations/<sid>", methods=["GET"])
+def recommendations(sid):
+    sid = normalize_id(sid)
+
+    with driver.session(database=NEO4J_DATABASE) as session:
+        skill_record = session.run(
+            """
+            MATCH (s:Student {id: $sid})-[:HAS_SKILL]->(sk:Skill)
+            RETURN collect(DISTINCT sk.name) AS skills
+            """,
+            sid=sid,
+        ).single()
+
+        student_exists = session.run(
+            "MATCH (s:Student {id: $sid}) RETURN count(s) AS total", sid=sid
+        ).single()
+        if not student_exists or student_exists["total"] == 0:
+            return jsonify({"error": "Student not found"}), 404
+
+        student_skills = sorted([x for x in (skill_record["skills"] or []) if x])
+
+        missing_rows = session.run(
+            """
+            MATCH (s:Student {id: $sid})-[:INTERESTED_IN]->(j:Job)-[:REQUIRES]->(sk:Skill)
+            WHERE NOT (s)-[:HAS_SKILL]->(sk)
+            RETURN DISTINCT sk.name AS skill
+            ORDER BY skill ASC
+            """,
+            sid=sid,
+        )
+        missing_skills = [r["skill"] for r in missing_rows]
+
+        course_rows = session.run(
+            """
+            MATCH (c:Course)-[:TEACHES]->(sk:Skill)
+            WHERE sk.name IN $missing
+            RETURN c.name AS course, collect(DISTINCT sk.name) AS teaches
+            ORDER BY course ASC
+            """,
+            missing=missing_skills,
+        )
+        courses = [{"course": r["course"], "teaches": r["teaches"]} for r in course_rows]
+
+        jobs = score_job_matches(session, student_skills)
+        required_for_interests = session.run(
+            """
+            MATCH (s:Student {id: $sid})-[:INTERESTED_IN]->(:Job)-[:REQUIRES]->(sk:Skill)
+            RETURN collect(DISTINCT sk.name) AS required
+            """,
+            sid=sid,
+        ).single()
+        required_skills = (required_for_interests or {}).get("required") or []
+        skill_gap_score = calculate_skill_gap_score(student_skills, required_skills)
+
+    return jsonify(
+        {
+            "student_id": sid,
+            "current_skills": student_skills,
+            "missing_skills": missing_skills,
+            "skill_gap_score": skill_gap_score,
+            "courses": courses,
+            "job_matches": jobs[:8],
+        }
+    )
+
+
+@app.route("/similar_students/<sid>", methods=["GET"])
+def similar_students(sid):
+    sid = normalize_id(sid)
+
+    query = """
+    MATCH (s1:Student {id: $sid})-[:HAS_SKILL]->(skill:Skill)<-[:HAS_SKILL]-(s2:Student)
+    WHERE s2.id <> s1.id
+    RETURN
+        s2.id AS student_id,
+        s2.name AS student_name,
+        collect(DISTINCT skill.name) AS shared_skills,
+        count(DISTINCT skill) AS score
+    ORDER BY score DESC, student_name ASC
+    """
+
+    with driver.session(database=NEO4J_DATABASE) as session:
+        rows = session.run(query, sid=sid)
+        similar = [
+            {
+                "student_id": row["student_id"],
+                "student_name": row["student_name"],
+                "shared_skills": row["shared_skills"],
+                "score": row["score"],
+            }
+            for row in rows
+        ]
+
+    return jsonify({"student": sid, "similar_students": similar})
 
 
 @app.route("/import_csv", methods=["POST"])
 def import_csv():
     try:
-        file = request.files["file"]
+        uploaded_file = request.files.get("file")
+        if not uploaded_file:
+            return jsonify({"error": "No file uploaded"}), 400
 
-        rows = csv.DictReader(
-            file.stream.read().decode("utf-8").splitlines()
-        )
+        rows = csv.DictReader(uploaded_file.stream.read().decode("utf-8").splitlines())
 
-        with driver.session() as session:
+        imported = 0
+        with driver.session(database=NEO4J_DATABASE) as session:
             for row in rows:
-                pid = row.get("pid", "").strip().upper()
-                name = row.get("name")
-                age = row.get("age")
-                gender = row.get("gender")
-                disease = row.get("disease")
+                sid = normalize_id(row.get("sid") or row.get("student_id"))
+                name = normalize_name(row.get("name"))
+                degree = normalize_name(row.get("degree"))
+                skills = parse_list_field(row.get("skills", ""))
+                interests = parse_list_field(row.get("interests", ""))
 
-                # 1️⃣ Create / update Patient
+                if not sid or not name:
+                    continue
+
                 session.run(
                     """
-                    MERGE (p:Patient {id:$pid})
-                    SET p.name=$name,
-                        p.age=$age,
-                        p.gender=$gender
+                    MERGE (s:Student {id: $sid})
+                    SET s.name = $name,
+                        s.degree = $degree
                     """,
-                    pid=pid,
+                    sid=sid,
                     name=name,
-                    age=age,
-                    gender=gender
+                    degree=degree,
                 )
 
-                # 2️⃣ Create Disease + Relationship
-                if disease:
-                    canonical_disease = resolve_disease_name(session, disease)
-
+                for skill in skills:
+                    canonical_skill = resolve_existing_name(session, "Skill", skill)
                     session.run(
                         """
-                        MATCH (p:Patient {id: toUpper(trim($pid))})
-                        MERGE (d:Disease {name:$disease})
-                        MERGE (p)-[:HAS_DISEASE]->(d)
+                        MATCH (s:Student {id: $sid})
+                        MERGE (sk:Skill {name: $skill})
+                        MERGE (s)-[:HAS_SKILL]->(sk)
                         """,
-                        pid=pid,
-                        disease=canonical_disease
+                        sid=sid,
+                        skill=canonical_skill,
                     )
 
-                print(f"✅ Imported {pid} → {disease}")
+                for job in interests:
+                    canonical_job = resolve_existing_name(session, "Job", job)
+                    session.run(
+                        """
+                        MATCH (s:Student {id: $sid})
+                        MERGE (j:Job {name: $job})
+                        MERGE (s)-[:INTERESTED_IN]->(j)
+                        """,
+                        sid=sid,
+                        job=canonical_job,
+                    )
 
-        return jsonify({"status": "CSV imported with relationships"}), 200
+                imported += 1
 
-    except Exception as e:
-        print("❌ ERROR in /import_csv:", e)
+        return jsonify({"status": "CSV imported", "rows": imported})
+    except Exception as exc:
+        print("ERROR in /import_csv:", exc)
         return jsonify({"error": "Failed to import CSV"}), 500
 
 
-
-
-# --------------------
-# Link Patient → Disease
-# --------------------
-@app.route("/link_patient_disease", methods=["POST"])
-def link_patient_disease():
-    data = request.json
-
-    pid = (data.get("pid") or "").strip().upper()
-    disease_raw = (data.get("disease") or "").strip()
-    if not pid or not disease_raw:
-        return {"error": "Patient ID and disease are required"}, 400
-
-    with driver.session() as session:
-        disease = resolve_disease_name(session, disease_raw)
-
-        query = """
-        MATCH (p:Patient {id:$pid})
-        MERGE (d:Disease {name:$disease})
-        MERGE (p)-[:HAS_DISEASE]->(d)
-        """
-
-        session.run(
-            query,
-            pid=pid,
-            disease=disease,
-        )
-
-    return {"status": "Disease linked successfully"}
-
-@app.route("/patient_insights/<pid>", methods=["GET"])
-def patient_insights(pid):
-
-    query = """
-    MATCH (p:Patient {id: toUpper(trim($pid))})
-    OPTIONAL MATCH (p)-[:HAS_DISEASE]->(d:Disease)
-    WITH p, [item IN collect(DISTINCT d) WHERE item IS NOT NULL] AS patient_diseases
-    OPTIONAL MATCH (canonical_d:Disease)
-    WHERE any(pd IN patient_diseases WHERE toLower(trim(pd.name)) = toLower(trim(canonical_d.name)))
-    OPTIONAL MATCH (drug:Drug)-[:TREATS]->(canonical_d)
-    OPTIONAL MATCH (drug)-[:TARGETS]->(target_g:Gene)
-    OPTIONAL MATCH (assoc_g:Gene)-[:ASSOCIATED_WITH]->(canonical_d)
-    RETURN
-        p.name AS patient_name,
-        p.id AS patient_id,
-        [name IN [pd IN patient_diseases | pd.name] WHERE name IS NOT NULL] AS diseases,
-        collect(DISTINCT drug.name) AS drugs,
-        collect(DISTINCT target_g.name) AS target_genes,
-        collect(DISTINCT assoc_g.name) AS associated_genes
-    """
-    with driver.session() as session:
-        record = session.run(query, pid=pid.strip()).single()
-
-    if not record:
-        return jsonify({"error": "Patient not found"}), 404
-
-    target_genes = [g for g in (record["target_genes"] or []) if g]
-    associated_genes = [g for g in (record["associated_genes"] or []) if g]
-    genes = sorted(set(target_genes + associated_genes))
-
-    return jsonify({
-        "patient_id": record["patient_id"],
-        "patient_name": record["patient_name"],
-        "diseases": record["diseases"],
-        "drugs": record["drugs"],
-        "genes": genes
-    })
-
-# --------------------
-# Graph API (FINAL & CORRECT)
-# --------------------
 @app.route("/graph", methods=["GET"])
 def get_graph():
     try:
-        with driver.session() as session:
-
-            # 1️⃣ Fetch nodes
-            nodes_query = """
-            MATCH (n)
-            RETURN DISTINCT n
-            """
-            nodes_result = session.run(nodes_query)
+        with driver.session(database=NEO4J_DATABASE) as session:
+            nodes_result = session.run("MATCH (n) RETURN DISTINCT n")
+            rels_result = session.run("MATCH (a)-[r]->(b) RETURN DISTINCT a, r, b")
 
             nodes = []
-            node_seen = set()
+            seen_nodes = set()
+
+            def node_key(n):
+                label = list(n.labels)[0]
+                if label == "Student":
+                    sid = normalize_id(n.get("id"))
+                    return f"Student:{sid}"
+
+                name = normalize_name(n.get("name"))
+                if not name:
+                    return None
+                return f"{label}:{name.lower()}"
+
+            def node_display(n):
+                label = list(n.labels)[0]
+                if label == "Student":
+                    sid = normalize_id(n.get("id"))
+                    return f"Student:{sid}"
+                name = normalize_name(n.get("name"))
+                return f"{label}:{name}"
 
             for record in nodes_result:
                 n = record["n"]
-                label = list(n.labels)[0]
-
-                if label == "Patient":
-                    patient_id = str(n.get("id") or "").strip().upper()
-                    node_id = f"Patient:{patient_id}"
-                    node_name = node_id
-                elif label == "Disease":
-                    disease_name = str(n.get("name") or "").strip()
-                    if not disease_name:
-                        continue
-
-                    # Collapse Disease:Fever and Disease:fever into one visual node.
-                    node_id = f"Disease:{disease_name.lower()}"
-                    node_name = f"Disease:{disease_name}"
-                else:
-                    raw_name = str(n.get("name") or "").strip()
-                    if not raw_name:
-                        continue
-
-                    node_id = f"{label}:{raw_name}"
-                    node_name = node_id
-
-        
-
-
-                if not node_id or node_id in node_seen:
+                key = node_key(n)
+                if not key or key in seen_nodes:
                     continue
 
-                node_seen.add(node_id)
-                nodes.append({
-                    "id": node_id,
-                    "label": list(n.labels)[0],
-                    "name": node_name
-                })
-
-            # 2️⃣ Fetch relationships
-            rels_query = """
-            MATCH (a)-[r]->(b)
-            RETURN DISTINCT a, r, b
-            """
-            rels_result = session.run(rels_query)
+                seen_nodes.add(key)
+                label = list(n.labels)[0]
+                payload = {
+                    "id": key,
+                    "label": label,
+                    "name": node_display(n),
+                }
+                if label == "Student":
+                    payload["student_id"] = normalize_id(n.get("id"))
+                nodes.append(payload)
 
             links = []
-            link_seen = set()
-
+            seen_links = set()
             for record in rels_result:
-                a = record["a"]
-                b = record["b"]
-                r = record["r"]
-
-                def node_key(n):
-                    label = list(n.labels)[0]
-                    if label == "Patient":
-                        return f"Patient:{n.get('id').strip().upper()}"
-                    elif label == "Disease":
-                        disease_name = str(n.get("name") or "").strip()
-                        if not disease_name:
-                            return None
-                        return f"Disease:{disease_name.lower()}"
-                    else:
-                        return f"{label}:{n.get('name')}"
-
-
-                source = node_key(a)
-                target = node_key(b)
-
-
+                source = node_key(record["a"])
+                target = node_key(record["b"])
+                rel_type = record["r"].type
                 if not source or not target:
                     continue
 
-                key = (source, target, r.type)
-                if key in link_seen:
+                key = (source, target, rel_type)
+                if key in seen_links:
                     continue
 
-                link_seen.add(key)
-                links.append({
-                    "source": source,
-                    "target": target,
-                    "type": r.type
-                })
+                seen_links.add(key)
+                links.append({"source": source, "target": target, "type": rel_type})
 
-            return jsonify({
-                "nodes": nodes,
-                "links": links
-            }), 200
+        return jsonify({"nodes": nodes, "links": links}), 200
+    except Exception as exc:
+        print("GRAPH ERROR:", exc)
+        fallback = build_graph_from_csv()
+        if fallback["nodes"]:
+            return (
+                jsonify(
+                    {
+                        "nodes": fallback["nodes"],
+                        "links": fallback["links"],
+                        "warning": "Neo4j unavailable - using CSV fallback graph",
+                    }
+                ),
+                200,
+            )
 
-    except Exception as e:
-        print("GRAPH ERROR:", e)
         return jsonify({"error": "Failed to load graph"}), 500
-
-
-
-# --------------------
-# Patient Diseases
-# --------------------
-@app.route("/patient_diseases/<pid>")
-def get_patient_diseases(pid):
-    query = """
-    MATCH (p:Patient {id: $pid})-[:HAS_DISEASE]->(d:Disease)
-    RETURN d.name AS disease
-    """
-    result = run_query(query, {"pid": pid})
-    return jsonify(result)
-
-@app.route("/similar_patients/<pid>", methods=["GET"])
-def get_similar_patients(pid):
-    print("🔍 Similar patients API called for:", pid)
-
-    query = """
-    MATCH (p:Patient {id: toUpper(trim($pid))})
-          -[:HAS_DISEASE]->(d)
-          <-[:HAS_DISEASE]-(other:Patient)
-    WHERE other.id <> p.id
-    RETURN DISTINCT other.id AS similar
-    """
-
-    with driver.session() as session:
-        result = session.run(query, pid=pid.strip())
-        similar = [r["similar"] for r in result]
-
-    print("✅ Similar patients found:", similar)
-
-    return jsonify({
-        "patient": pid,
-        "similar_patients": similar
-    })
-
-
-
-# --------------------
-# Run Server
-# --------------------
-if __name__ == "__main__":
-    app.run(debug=True)
 
 
 @app.route("/node_info", methods=["GET"])
 def node_info():
-    node_id = request.args.get("id")
-    label = request.args.get("label")
+    node_id = normalize_name(request.args.get("id"))
+    label = normalize_name(request.args.get("label"))
 
-    # DRUG INFO
-    if label == "Drug":
-        query = """
-        MATCH (d:Drug {name:$name})
-        OPTIONAL MATCH (d)-[:TREATS]->(dis:Disease)
-        OPTIONAL MATCH (d)-[:TARGETS]->(g:Gene)
-        RETURN
-          collect(DISTINCT dis.name) AS diseases,
-          collect(DISTINCT g.name) AS genes
-        """
-        result = run_query(query, {"name": node_id})
-        return jsonify(result[0])
+    with driver.session(database=NEO4J_DATABASE) as session:
+        if label == "Student":
+            sid = node_id.split(":")[-1].upper()
+            record = session.run(
+                """
+                MATCH (s:Student {id: $sid})
+                OPTIONAL MATCH (s)-[:HAS_SKILL]->(sk:Skill)
+                OPTIONAL MATCH (s)-[:INTERESTED_IN]->(j:Job)
+                RETURN
+                    s.name AS name,
+                    s.degree AS degree,
+                    collect(DISTINCT sk.name) AS skills,
+                    collect(DISTINCT j.name) AS jobs
+                """,
+                sid=sid,
+            ).single()
+            return jsonify(record.data() if record else {})
 
-    # PATIENT INFO
-    if label == "Patient":
-        query = """
-        MATCH (p:Patient {id: $pid})
-
-        OPTIONAL MATCH (p)-[:HAS_DISEASE]->(d:Disease)
-        OPTIONAL MATCH (drug:Drug)-[:TREATS]->(d)
-        OPTIONAL MATCH (d)-[:HAS_SYMPTOM]->(s:Symptom)
-        RETURN
-          p.age AS age,
-          p.gender AS gender,
-          p.notes AS notes,
-          collect(DISTINCT d.name) AS diseases,
-          collect(DISTINCT drug.name) AS drugs,
-          collect(DISTINCT s.name) AS symptoms
-        """
-        result = run_query(query, {"pid": node_id})
-        return jsonify(result[0])
+        if label == "Job":
+            job_name = node_id.split(":", 1)[-1]
+            record = session.run(
+                """
+                MATCH (j:Job)
+                WHERE toLower(j.name) = toLower($job_name)
+                OPTIONAL MATCH (j)-[:REQUIRES]->(sk:Skill)
+                OPTIONAL MATCH (c:Company)-[:OFFERS]->(j)
+                RETURN
+                    j.name AS name,
+                    collect(DISTINCT sk.name) AS required_skills,
+                    collect(DISTINCT c.name) AS companies
+                LIMIT 1
+                """,
+                job_name=job_name,
+            ).single()
+            return jsonify(record.data() if record else {})
 
     return jsonify({})
 
 
-
+if __name__ == "__main__":
+    app.run(debug=True)

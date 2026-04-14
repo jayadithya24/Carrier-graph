@@ -2,19 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>NeoGraphMed</title>
+  <title>CareerGraph</title>
   <link rel="stylesheet" href="css/app.css" />
 </head>
 <body>
 
 <header>
-  <h1>NeoGraphMed</h1>
+  <h1>CareerGraph</h1>
 
   <!-- ✅ ALL navigation buttons MUST be inside nav -->
   <nav>
-    <button data-view="add">Add Patient</button>
-    <button data-view="link">Link Disease</button>
-    <button data-view="search">Patient Insights</button>
+    <button data-view="add">Add Student</button>
+    <button data-view="link">Link Data</button>
+    <button data-view="insights">Insights</button>
+    <button data-view="recommend">Recommendations</button>
+    <button data-view="import">Import CSV</button>
     <button id="btnGraph" data-view="graph">Graph View</button>
 
   </nav>
@@ -23,7 +25,7 @@
 <main id="app" class="centered"></main>
 
 <footer>
-  <p>Graph-based Healthcare Intelligence System</p>
+  <p>Graph-based Academic and Career Intelligence System</p>
 </footer>
 
 <!-- ✅ D3 MUST load before app.js -->
