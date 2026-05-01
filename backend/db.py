@@ -1,9 +1,9 @@
 from neo4j import GraphDatabase
 import os
 
-URI = "bolt://127.0.0.1:7687"
-USER = "neo4j"
-PASSWORD = "neo4j123"  # same password as Neo4j Desktop
+URI = os.getenv("NEO4J_URI", "bolt://127.0.0.1:7687")
+USER = os.getenv("NEO4J_USER", "neo4j")
+PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j123")  # fallback for local dev
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "bda")
 
 driver = GraphDatabase.driver(URI, auth=(USER, PASSWORD))
