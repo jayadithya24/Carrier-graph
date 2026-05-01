@@ -10,7 +10,7 @@ export function dashboardView() {
         <button data-view="link">Link Skill or Job Interest</button>
         <button data-view="insights">Student Insights</button>
         <button data-view="recommend">Recommendations</button>
-        <button data-view="import">Import Students CSV</button>
+        <!-- <button data-view="import">Import Students CSV</button> -->
       </div>
     </section>
   `;
@@ -33,27 +33,7 @@ export function addStudentView() {
   `;
 }
 
-export function linkView() {
-  return `
-    <section class="card">
-      <h2>Link Student Data</h2>
-      <input id="linkSid" placeholder="Student ID" />
-
-      <div class="split-actions">
-        <input id="linkSkill" placeholder="Skill to add" />
-        <button id="linkSkillBtn" class="primary-btn">Link Skill</button>
-      </div>
-
-      <div class="split-actions">
-        <input id="linkJob" placeholder="Job interest to add" />
-        <button id="linkJobBtn" class="primary-btn">Link Job Interest</button>
-      </div>
-
-      <p id="linkStatus" class="status"></p>
-      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
-    </section>
-  `;
-}
+// linkView removed
 
 export function insightsView() {
   return `
@@ -145,5 +125,41 @@ export function graphView() {
 
       <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
     </section>
+  `;
+}
+
+export function resumeUploadView(studentId = "") {
+  return `
+    <section class="card">
+      <h2>Upload Resume</h2>
+      <input id="resumeStudentId" placeholder="Student ID" value="${studentId}" />
+      <input type="file" id="resumeFile" accept=".pdf,.docx" />
+      <button id="uploadResumeBtn" class="primary-btn">Upload Resume</button>
+      <div id="resumeLoading" style="display:none">Processing...</div>
+      <div id="resumeResults"></div>
+      <p id="resumeError" class="error"></p>
+      <button class="back-btn" data-view="dashboard">Back to Dashboard</button>
+    </section>
+  `;
+}
+
+export function resumeResultsView(data) {
+  return `
+    <div class="resume-results">
+      <h3>Extracted Skills</h3>
+      <ul>${(data.extracted_skills || []).map(s => `<li>${s}</li>`).join("") || "<li>None</li>"}</ul>
+      <h3>Added Skills</h3>
+      <ul>${(data.added_skills || []).map(s => `<li>${s}</li>`).join("") || "<li>None</li>"}</ul>
+      <h3>Missing Skills</h3>
+      <ul>${(data.missing_skills || []).map(s => `<li>${s}</li>`).join("") || "<li>None</li>"}</ul>
+      <h3>Recommended Jobs</h3>
+      <ul>${(data.recommended_jobs || []).map(j => `<li>${j.job} (${j.score}%)</li>`).join("") || "<li>None</li>"}</ul>
+      <h3>Recommended Courses</h3>
+      <ul>${(data.recommended_courses || []).map(c => `<li>${c.course}: ${c.teaches.join(', ')}</li>`).join("") || "<li>None</li>"}</ul>
+      <h3>Education</h3>
+      <ul>${(data.education || []).map(e => `<li>${e}</li>`).join("") || "<li>None</li>"}</ul>
+      <h3>Experience</h3>
+      <ul>${(data.experience || []).map(e => `<li>${e}</li>`).join("") || "<li>None</li>"}</ul>
+    </div>
   `;
 }

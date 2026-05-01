@@ -1,13 +1,135 @@
+
 from flask import Flask, jsonify, request
+from werkzeug.utils import secure_filename
+import io
+from resume_parser import parse_resume
 from flask_cors import CORS
 from neo4j import GraphDatabase
 import csv
 import os
 
+# Flask app initialization must come first
 app = Flask(__name__)
 CORS(app)
 
+ALLOWED_EXTENSIONS = {'.pdf', '.docx'}
 
+def allowed_file(filename):
+    return '.' in filename and os.path.splitext(filename)[-1].lower() in ALLOWED_EXTENSIONS
+@app.route("/upload_resume/<student_id>", methods=["POST"])
+def upload_resume(student_id):
+    sid = normalize_id(student_id)
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"error": "Invalid file type"}), 400
+
+    filename = secure_filename(file.filename)
+    file_stream = io.BytesIO(file.read())
+
+    # Fetch all skills from DB for better matching
+    with driver.session(database=NEO4J_DATABASE) as session:
+        db_skills = session.run("MATCH (sk:Skill) RETURN sk.name AS name").value()
+
+    try:
+        parsed = parse_resume(file_stream, filename, db_skills)
+    except Exception as exc:
+        print("Resume parsing error:", exc)
+        return jsonify({"error": "Failed to parse resume"}), 500
+
+    extracted_skills = parsed['skills']
+    education = parsed['education']
+    experience = parsed['experience']
+
+    added_skills = []
+    added_interests = []
+    # For this use-case, extract job interests from resume (if not present, leave empty)
+    # Let's assume resume_parser returns a 'jobs' key (list of job names) or you can extract from experience/education/keywords
+    job_interests = parsed.get('jobs', [])
+    # If not present, fallback to empty
+    if not isinstance(job_interests, list):
+        job_interests = []
+
+    with driver.session(database=NEO4J_DATABASE) as session:
+        # Remove all links except HAS_SKILL and INTERESTED_IN for this student (optional cleanup)
+        session.run(
+            """
+            MATCH (s:Student {id: $sid})-[r]
+            WHERE type(r) <> 'HAS_SKILL' AND type(r) <> 'INTERESTED_IN'
+            DELETE r
+            """,
+            sid=sid
+        )
+
+        # Get current student skills
+        skill_record = session.run(
+            """
+            MATCH (s:Student {id: $sid})-[:HAS_SKILL]->(sk:Skill)
+            RETURN collect(DISTINCT sk.name) AS skills
+            """,
+            sid=sid,
+        ).single()
+        current_skills = set(skill_record["skills"] or [])
+
+        # Add missing skills to Neo4j
+        for skill in extracted_skills:
+            if skill not in current_skills:
+                session.run(
+                    """
+                    MERGE (sk:Skill {name: $skill})
+                    MATCH (s:Student {id: $sid})
+                    MERGE (s)-[:HAS_SKILL]->(sk)
+                    """,
+                    skill=skill,
+                    sid=sid,
+                )
+                added_skills.append(skill)
+
+        # Add job interests (INTERESTED_IN)
+        for job in job_interests:
+            session.run(
+                """
+                MERGE (j:Job {name: $job})
+                MATCH (s:Student {id: $sid})
+                MERGE (s)-[:INTERESTED_IN]->(j)
+                """,
+                job=job,
+                sid=sid,
+            )
+            added_interests.append(job)
+
+    return jsonify({
+        "extracted_skills": extracted_skills,
+        "added_skills": added_skills,
+        "added_interests": added_interests,
+    })
+        #         """,
+        #         sid=sid, desc=edu[:200]
+        #     )
+        # for exp in experience:
+        #     session.run(
+        #         """
+        #         MATCH (s:Student {id: $sid})
+        #         MERGE (x:Experience {desc: $desc})
+        #         MERGE (s)-[:HAS_EXPERIENCE]->(x)
+        #         """,
+        #         sid=sid, desc=exp[:200]
+        #     )
+
+    return jsonify({
+        "extracted_skills": extracted_skills,
+        "added_skills": added_skills,
+        "missing_skills": missing_skills,
+        "recommended_jobs": recommended_jobs,
+        "recommended_courses": recommended_courses,
+        "education": education,
+        "experience": experience
+    })
+
+## Removed stray duplicate line that caused syntax error
 driver = GraphDatabase.driver(
     "bolt://localhost:7687",
     auth=("neo4j", "neo4j123"),
@@ -549,16 +671,20 @@ def get_graph():
             nodes = []
             seen_nodes = set()
 
+
             def node_key(n):
                 label = list(n.labels)[0]
                 if label == "Student":
                     sid = normalize_id(n.get("id"))
-                    return f"Student:{sid}"
-
+                    if sid:
+                        return f"Student:{sid}"
                 name = normalize_name(n.get("name"))
-                if not name:
-                    return None
-                return f"{label}:{name.lower()}"
+                if name:
+                    return f"{label}:{name.lower()}"
+                # Fallback to Neo4j internal id if missing properties
+                return f"{label}:neo4j_{n.id}"
+
+            skipped_nodes = []
 
             def node_display(n):
                 label = list(n.labels)[0]
@@ -571,9 +697,11 @@ def get_graph():
             for record in nodes_result:
                 n = record["n"]
                 key = node_key(n)
-                if not key or key in seen_nodes:
+                if key in seen_nodes:
                     continue
-
+                if not key:
+                    skipped_nodes.append(dict(n))
+                    continue
                 seen_nodes.add(key)
                 label = list(n.labels)[0]
                 payload = {
@@ -601,6 +729,8 @@ def get_graph():
                 seen_links.add(key)
                 links.append({"source": source, "target": target, "type": rel_type})
 
+        if skipped_nodes:
+            print(f"Skipped nodes due to missing properties: {skipped_nodes}")
         return jsonify({"nodes": nodes, "links": links}), 200
     except Exception as exc:
         print("GRAPH ERROR:", exc)

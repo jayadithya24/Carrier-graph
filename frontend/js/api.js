@@ -76,3 +76,13 @@ export async function importCsv(file) {
   });
   return parseResponse(res);
 }
+
+export async function uploadResume(studentId, file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch(`${BASE_URL}/upload_resume/${encodeURIComponent(studentId)}`, {
+    method: "POST",
+    body: formData
+  });
+  return parseResponse(res);
+}

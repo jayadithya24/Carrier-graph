@@ -14,9 +14,11 @@ import {
   graphView,
   importCSVView,
   insightsView,
-  linkView,
+  // linkView,
   recommendationView
 } from "./components.js";
+import { resumeUploadView, resumeResultsView } from "./components.js";
+import { uploadResume } from "./api.js";
 
 const app = document.getElementById("app");
 
@@ -68,11 +70,11 @@ function render(view) {
     return;
   }
 
-  if (view === "link") {
-    app.innerHTML = linkView();
-    app.classList.add("centered");
-    return;
-  }
+  // if (view === "link") {
+  //   app.innerHTML = linkView();
+  //   app.classList.add("centered");
+  //   return;
+  // }
 
   if (view === "insights") {
     app.innerHTML = insightsView();
@@ -98,6 +100,8 @@ function render(view) {
     loadGraph();
     return;
   }
+
+  // Resume upload view removed
 
   app.innerHTML = dashboardView();
   app.classList.add("centered");
@@ -451,17 +455,50 @@ function applyRelationshipFilter(relType) {
   graphState.label.style("opacity", (d) => (connected.has(d.id) ? 1 : 0.12));
 }
 
-function renderNodeDetails(nodeData) {
+async function renderNodeDetails(nodeData) {
   const panel = document.getElementById("details-panel");
-  if (!panel) {
+  if (!panel) return;
+
+  if (nodeData.label === "Student") {
+    // Find jobs the student is interested in (INTERESTED_IN)
+    const studentId = nodeData.id;
+    const interestLinks = graphState.links.filter(l => l.type === "INTERESTED_IN" && (l.source.id || l.source) === studentId);
+    const jobs = interestLinks.map(l => {
+      const jobNode = graphState.nodes.find(n => n.id === (l.target.id || l.target));
+      return jobNode ? jobNode : null;
+    }).filter(Boolean);
+
+    // For each job, find companies that offer it (OFFERS)
+    let companiesByJob = [];
+    jobs.forEach(jobNode => {
+      const companyLinks = graphState.links.filter(l => l.type === "OFFERS" && (l.target.id || l.target) === jobNode.id);
+      const companyNames = companyLinks.map(l => {
+        const companyNode = graphState.nodes.find(n => n.id === (l.source.id || l.source));
+        return companyNode ? companyNode.name : null;
+      }).filter(Boolean);
+      companiesByJob.push({ job: jobNode.name, companies: companyNames });
+    });
+
+    panel.innerHTML = `
+      <h4>Student</h4>
+      <p><strong>${(nodeData.name || nodeData.id).split(":").pop()}</strong></p>
+      <h5>Interested Jobs</h5>
+      <ul>${jobs.length ? jobs.map(j => `<li>${j.name}</li>`).join("") : "<li>None</li>"}</ul>
+      <h5>Companies Offering These Jobs</h5>
+      <ul>
+        ${companiesByJob.length ? companiesByJob.map(j =>
+          `<li><strong>${j.job}</strong>: ${j.companies.length ? j.companies.join(", ") : "No companies found"}</li>`
+        ).join("") : "<li>None</li>"}
+      </ul>
+    `;
     return;
   }
 
+  // Default: show relationships
   const related = [];
   graphState.links.forEach((l) => {
     const s = l.source.id || l.source;
     const t = l.target.id || l.target;
-
     if (s === nodeData.id) {
       const targetName = (l.target.name || l.target.id || t).toString().split(":").pop();
       related.push(`${l.type} -> ${targetName}`);
@@ -471,11 +508,9 @@ function renderNodeDetails(nodeData) {
       related.push(`${l.type} <- ${sourceName}`);
     }
   });
-
   const list = related.length
     ? `<ul>${related.map((item) => `<li>${item}</li>`).join("")}</ul>`
     : "<p class='muted'>No connected relationships.</p>";
-
   panel.innerHTML = `
     <h4>${nodeData.label}</h4>
     <p><strong>${(nodeData.name || nodeData.id).split(":").pop()}</strong></p>
@@ -598,10 +633,10 @@ async function loadGraph() {
     .attr("text-anchor", "middle")
     .attr("fill", "#111827");
 
-  node.on("click", (event, d) => {
+  node.on("click", async (event, d) => {
     event.stopPropagation();
     graphState.selectedNode = d;
-    renderNodeDetails(d);
+    await renderNodeDetails(d);
   });
 
   svg.on("click", () => {
@@ -921,4 +956,125 @@ document.addEventListener("change", (event) => {
 
 window.addEventListener("DOMContentLoaded", () => {
   render("dashboard");
+
+  // If Graph View is shown, initialize Cytoscape
+  document.addEventListener("click", (event) => {
+    if (event.target.id === "btnGraph") {
+      setTimeout(() => {
+        if (document.getElementById("cy")) {
+          renderCytoscapeGraph();
+        }
+      }, 100);
+    }
+  });
 });
+
+function renderCytoscapeGraph() {
+  const cy = window.cytoscape({
+    container: document.getElementById("cy"),
+    elements: [
+      // Sample nodes
+      { data: { id: "S001", label: "Student", name: "S001" } },
+      { data: { id: "S002", label: "Student", name: "S002" } },
+      { data: { id: "React", label: "Skill", name: "React" } },
+      { data: { id: "SQL", label: "Skill", name: "SQL" } },
+      { data: { id: "Frontend Engineer", label: "Job", name: "Frontend Engineer" } },
+      { data: { id: "React Bootcamp", label: "Course", name: "React Bootcamp" } },
+      { data: { id: "Microsoft", label: "Company", name: "Microsoft" } },
+      // Sample edges
+      { data: { source: "S001", target: "React", label: "HAS_SKILL" } },
+      { data: { source: "S001", target: "Frontend Engineer", label: "INTERESTED_IN" } },
+      { data: { source: "Frontend Engineer", target: "React", label: "REQUIRES" } },
+      { data: { source: "React Bootcamp", target: "React", label: "TEACHES" } },
+      { data: { source: "Microsoft", target: "Frontend Engineer", label: "OFFERS" } },
+    ],
+    style: [
+      {
+        selector: 'node[label="Student"]',
+        style: { 'background-color': '#16a34a', 'label': 'data(name)' }
+      },
+      {
+        selector: 'node[label="Skill"]',
+        style: { 'background-color': '#2563eb', 'label': 'data(name)' }
+      },
+      {
+        selector: 'node[label="Course"]',
+        style: { 'background-color': '#f97316', 'label': 'data(name)' }
+      },
+      {
+        selector: 'node[label="Job"]',
+        style: { 'background-color': '#dc2626', 'label': 'data(name)' }
+      },
+      {
+        selector: 'node[label="Company"]',
+        style: { 'background-color': '#7c3aed', 'label': 'data(name)' }
+      },
+      {
+        selector: 'edge',
+        style: {
+          'width': 2,
+          'line-color': '#a1a1aa',
+          'target-arrow-color': '#a1a1aa',
+          'target-arrow-shape': 'triangle',
+          'curve-style': 'bezier',
+          'label': 'data(label)',
+          'font-size': '10px',
+          'text-rotation': 'autorotate',
+          'text-margin-y': -10
+        }
+      }
+    ],
+    layout: {
+      name: 'cose',
+      animate: true
+    }
+  });
+
+  cy.on('tap', 'node', function(evt){
+    const node = evt.target.data();
+    const details = document.getElementById('node-details-content');
+    if (details) {
+      details.innerHTML = `<strong>${node.label}</strong>: ${node.name}`;
+    }
+  });
+
+  cy.on('tap', function(evt){
+    if(evt.target === cy) {
+      const details = document.getElementById('node-details-content');
+      if (details) details.innerHTML = 'Click a node to inspect its connections.';
+    }
+  });
+}
+
+function showResumeUpload(studentId = "") {
+  app.innerHTML = resumeUploadView(studentId);
+  document.getElementById("uploadResumeBtn").onclick = async () => {
+    const sid = document.getElementById("resumeStudentId").value.trim();
+    const fileInput = document.getElementById("resumeFile");
+    const errorEl = document.getElementById("resumeError");
+    const loadingEl = document.getElementById("resumeLoading");
+    const resultsEl = document.getElementById("resumeResults");
+    errorEl.textContent = "";
+    resultsEl.innerHTML = "";
+    if (!sid) {
+      errorEl.textContent = "Student ID required";
+      return;
+    }
+    if (!fileInput.files.length) {
+      errorEl.textContent = "Please select a PDF or DOCX file.";
+      return;
+    }
+    loadingEl.style.display = "block";
+    try {
+      const result = await uploadResume(sid, fileInput.files[0]);
+      resultsEl.innerHTML = resumeResultsView(result);
+    } catch (err) {
+      errorEl.textContent = err.message || "Upload failed.";
+    } finally {
+      loadingEl.style.display = "none";
+    }
+  };
+  document.querySelectorAll(".back-btn").forEach(btn => btn.onclick = () => renderView("dashboard"));
+}
+
+// Removed addResumeNavButton and its call. The button is now always present in HTML and handled by [data-view] navigation.
