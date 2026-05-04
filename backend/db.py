@@ -3,8 +3,9 @@ from neo4j import GraphDatabase
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file if present
-load_dotenv()
+# Load environment variables from repo root .env if present
+root_env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path=root_env_path)
 
 URI = os.getenv("NEO4J_URI")
 USER = os.getenv("NEO4J_USER")
