@@ -4,13 +4,17 @@ from werkzeug.utils import secure_filename
 import io
 from resume_parser import parse_resume
 from flask_cors import CORS
-from neo4j import GraphDatabase
 import csv
 import os
+from db import driver, NEO4J_DATABASE
 
 # Flask app initialization must come first
 app = Flask(__name__)
-CORS(app)
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    CORS(app, origins=[frontend_url])
+else:
+    CORS(app)
 
 ALLOWED_EXTENSIONS = {'.pdf', '.docx'}
 
@@ -129,12 +133,7 @@ def upload_resume(student_id):
         "experience": experience
     })
 
-## Removed stray duplicate line that caused syntax error
-driver = GraphDatabase.driver(
-    "bolt://localhost:7687",
-    auth=("neo4j", "neo4j123"),
-)
-NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "bda")
+## Database connection is configured in db.py
 
 
 def normalize_name(value):
