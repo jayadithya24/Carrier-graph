@@ -279,6 +279,9 @@ function showNodesByCategory(category) {
 }
 
 function applyGraphFocusFilter(mode) {
+  if (!graphState.node || !graphState.link || !graphState.label || !graphState.linkLabel || !graphState.links) {
+    return;
+  }
   if (!mode) {
     resetGraphVisibility();
     return;
@@ -436,6 +439,9 @@ function highlightNodeByQuery(query) {
 }
 
 function applyRelationshipFilter(relType) {
+  if (!graphState.node || !graphState.link || !graphState.label || !graphState.linkLabel || !graphState.links) {
+    return;
+  }
   if (!relType) {
     resetGraphVisibility();
     return;
@@ -538,7 +544,7 @@ async function loadGraph() {
   } catch (err) {
     container.innerHTML = `
       <p class='error'>Unable to load graph: ${err.message}</p>
-      <p class='muted'>Make sure Neo4j is running on bolt://localhost:7687, then refresh graph.</p>
+      <p class='muted'>Make sure the backend can reach Neo4j, then refresh graph.</p>
     `;
     return;
   }

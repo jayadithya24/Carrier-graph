@@ -1,6 +1,6 @@
-const BASE_URL = typeof process !== 'undefined' && process.env && process.env.BACKEND_URL
-  ? process.env.BACKEND_URL
-  : (window.BACKEND_URL || "https://carrier-graph.onrender.com");
+const BASE_URL = (typeof window !== "undefined" && window.BACKEND_URL)
+  ? window.BACKEND_URL
+  : (typeof window !== "undefined" ? `${window.location.origin}/api` : "");
 
 async function parseResponse(res) {
   const raw = await res.text();
